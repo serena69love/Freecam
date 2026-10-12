@@ -17,7 +17,7 @@ local player = Players.LocalPlayer
 
 -- Settings
 local TOGGLE_KEY = Enum.KeyCode.V
-local ALWAYS_LOOK = true       -- true = mouse always looks (no right-click needed)
+local ALWAYS_LOOK = false       -- true = mouse always looks (no right-click needed)
 local BASE_SPEED = 50
 local FAST_MULTIPLIER = 3
 local SLOW_MULTIPLIER = 0.25
