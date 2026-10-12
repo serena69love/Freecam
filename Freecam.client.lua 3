@@ -1,0 +1,171 @@
+--[[
+	Freecam (toggle with V)
+	Put this in a LocalScript (NOT a regular Script) inside
+	StarterPlayer > StarterPlayerScripts
+
+	W/A/S/D move | E/Q up/down | Shift fast | Ctrl slow
+	Mouse looks around | Scroll wheel changes speed
+]]
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+local player = Players.LocalPlayer
+
+-- Settings
+local TOGGLE_KEY = Enum.KeyCode.V
+local BASE_SPEED = 50
+local FAST_MULTIPLIER = 3
+local SLOW_MULTIPLIER = 0.25
+local MOUSE_SENSITIVITY = 0.004 -- radians per pixel
+local MIN_SPEED, MAX_SPEED = 5, 500
+
+-- State
+local enabled = false
+local speed = BASE_SPEED
+local pitch, yaw = 0, 0
+local position = Vector3.zero
+local lookDelta = Vector2.zero -- accumulated mouse movement since last frame
+
+local savedCameraType
+local savedMouseIconEnabled
+local savedAnchored
+local controls
+
+local RENDER_NAME = "FreecamUpdate"
+
+-- Default controls module (used to stop the character walking while flying)
+task.spawn(function()
+	local ok, result = pcall(function()
+		local playerModule = player:WaitForChild("PlayerScripts"):WaitForChild("PlayerModule", 10)
+		return require(playerModule):GetControls()
+	end)
+	if ok then
+		controls = result
+	end
+end)
+
+local function getRootPart()
+	local character = player.Character
+	return character and character:FindFirstChild("HumanoidRootPart")
+end
+
+local function down(key)
+	return UserInputService:IsKeyDown(key) and 1 or 0
+end
+
+local function update(dt)
+	local camera = workspace.CurrentCamera
+	if not camera then return end
+
+	-- Keep the camera ours and the mouse locked (other scripts may reset these)
+	camera.CameraType = Enum.CameraType.Scriptable
+	UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+	UserInputService.MouseIconEnabled = false
+
+	-- Look: use mouse movement gathered from InputChanged, plus GetMouseDelta as a backup
+	local delta = lookDelta + UserInputService:GetMouseDelta()
+	lookDelta = Vector2.zero
+	yaw = yaw - delta.X * MOUSE_SENSITIVITY
+	pitch = math.clamp(pitch - delta.Y * MOUSE_SENSITIVITY, math.rad(-89), math.rad(89))
+
+	local rotation = CFrame.Angles(0, yaw, 0) * CFrame.Angles(pitch, 0, 0)
+
+	-- Move (ignored while typing in a TextBox such as chat)
+	local move = Vector3.zero
+	if not UserInputService:GetFocusedTextBox() then
+		move = rotation.RightVector * (down(Enum.KeyCode.D) - down(Enum.KeyCode.A))
+			+ rotation.LookVector * (down(Enum.KeyCode.W) - down(Enum.KeyCode.S))
+			+ Vector3.yAxis * (down(Enum.KeyCode.E) - down(Enum.KeyCode.Q))
+	end
+
+	if move.Magnitude > 0 then
+		local multiplier = 1
+		if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) or UserInputService:IsKeyDown(Enum.KeyCode.RightShift) then
+			multiplier = FAST_MULTIPLIER
+		elseif UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or UserInputService:IsKeyDown(Enum.KeyCode.RightControl) then
+			multiplier = SLOW_MULTIPLIER
+		end
+		position = position + move.Unit * speed * multiplier * dt
+	end
+
+	camera.CFrame = CFrame.new(position) * rotation
+end
+
+local function enableFreecam()
+	if enabled then return end
+	enabled = true
+
+	local camera = workspace.CurrentCamera
+	local startCFrame = camera.CFrame
+	position = startCFrame.Position
+	local rx, ry = startCFrame:ToOrientation()
+	pitch, yaw = rx, ry
+	lookDelta = Vector2.zero
+
+	savedCameraType = camera.CameraType
+	savedMouseIconEnabled = UserInputService.MouseIconEnabled
+
+	if controls then
+		controls:Disable()
+	end
+	local root = getRootPart()
+	if root then
+		savedAnchored = root.Anchored
+		root.Anchored = true
+	end
+
+	-- Bind AFTER the default camera so our CFrame wins
+	RunService:BindToRenderStep(RENDER_NAME, Enum.RenderPriority.Last.Value, update)
+	print("[Freecam] enabled")
+end
+
+local function disableFreecam()
+	if not enabled then return end
+	enabled = false
+
+	RunService:UnbindFromRenderStep(RENDER_NAME)
+
+	local camera = workspace.CurrentCamera
+	camera.CameraType = savedCameraType or Enum.CameraType.Custom
+	UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+	UserInputService.MouseIconEnabled = savedMouseIconEnabled ~= false
+
+	local root = getRootPart()
+	if root then
+		root.Anchored = savedAnchored or false
+	end
+	if controls then
+		controls:Enable()
+	end
+	print("[Freecam] disabled")
+end
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+	if input.KeyCode == TOGGLE_KEY then
+		if enabled then
+			disableFreecam()
+		else
+			enableFreecam()
+		end
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input, gameProcessed)
+	if not enabled then return end
+
+	-- Mouse look (intentionally ignores gameProcessed so GUIs can't block it)
+	if input.UserInputType == Enum.UserInputType.MouseMovement then
+		lookDelta = lookDelta + Vector2.new(input.Delta.X, input.Delta.Y)
+	elseif input.UserInputType == Enum.UserInputType.MouseWheel and not gameProcessed then
+		speed = math.clamp(speed * (1 + input.Position.Z * 0.1), MIN_SPEED, MAX_SPEED)
+	end
+end)
+
+player.CharacterAdded:Connect(function()
+	if enabled then
+		disableFreecam()
+	end
+end)
